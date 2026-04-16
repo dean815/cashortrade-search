@@ -170,7 +170,7 @@ def fetch_all_listings(event_product_uids: list[str]) -> list[dict]:
 # Parsing
 # ---------------------------------------------------------------------------
 
-def parse_listing(raw: dict, page_url: str) -> dict:
+def parse_listing(raw: dict, page_url: str, product_meta: dict) -> dict:
     """Parse a raw API listing into a flat dict for display/filter/sort."""
     tickets = raw.get("tickets", [])
 
@@ -222,7 +222,25 @@ def parse_listing(raw: dict, page_url: str) -> dict:
     # Link
     link = f"{page_url}?proposal_drawer_uid={raw.get('uid', '')}"
 
+    # Event metadata — look up from product_meta via ticket's event_product uid
+    event_product_uid = ""
+    if tickets and tickets[0].get("event_product"):
+        event_product_uid = tickets[0]["event_product"].get("uid", "")
+    meta = product_meta.get(event_product_uid, {})
+
+    # Fallback: if listing has embedded event_product data, use it directly
+    if not meta and tickets and tickets[0].get("event_product"):
+        ep = tickets[0]["event_product"]
+        meta = {
+            "event_title": "",
+            "event_date": ep.get("start", ""),
+            "ticket_type": ep.get("title", ""),
+        }
+
     return {
+        "event_title": meta.get("event_title", ""),
+        "event_date": meta.get("event_date", ""),
+        "ticket_type": meta.get("ticket_type", ""),
         "flow": raw.get("flow", ""),
         "num_tickets": num_tickets,
         "price": price,
@@ -435,6 +453,17 @@ Examples:
     console.print("Loading event...")
     event_title, products, page_url = extract_event_from_url(args.url)
     product_uids = [p["uid"] for p in products]
+
+    # Build product metadata lookup: uid -> {event_title, event_date, ticket_type}
+    product_meta = {}
+    for p in products:
+        uid = p["uid"]
+        product_meta[uid] = {
+            "event_title": event_title,
+            "event_date": p.get("start", ""),
+            "ticket_type": p.get("title", ""),
+        }
+
     console.print(f"Event: [bold green]{event_title}[/bold green]")
 
     # Fetch all listings
@@ -442,7 +471,7 @@ Examples:
     raw_listings = fetch_all_listings(product_uids)
 
     # Parse
-    parsed = [parse_listing(r, page_url) for r in raw_listings]
+    parsed = [parse_listing(r, page_url, product_meta) for r in raw_listings]
 
     # Filter
     filtered = apply_filters(parsed, args)
