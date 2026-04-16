@@ -332,7 +332,6 @@ def format_listed(created: str) -> str:
     if not created:
         return ""
     try:
-        from datetime import datetime
         dt = datetime.strptime(created, "%Y-%m-%d %H:%M:%S")
         return dt.strftime("%m/%d %-I:%M%p").lower()
     except (ValueError, TypeError):
