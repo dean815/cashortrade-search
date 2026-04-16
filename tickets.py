@@ -67,8 +67,16 @@ def extract_event_from_url(url_or_path: str) -> tuple[str, list[dict], str]:
     clean_path = path.split("?")[0]
     page_url = f"{SITE_BASE}/{clean_path}"
 
+    import time
     console.print(f"  Fetching: [dim]{page_url}[/dim]")
-    resp = requests.get(page_url, headers={"Accept": "text/html"}, timeout=15)
+    for attempt in range(5):
+        resp = requests.get(page_url, headers={"Accept": "text/html"}, timeout=15)
+        if resp.status_code == 429:
+            wait = 2 ** attempt
+            console.print(f"  Rate limited, waiting {wait}s...", style="yellow")
+            time.sleep(wait)
+            continue
+        break
     resp.raise_for_status()
     html = resp.text
 
@@ -78,6 +86,8 @@ def extract_event_from_url(url_or_path: str) -> tuple[str, list[dict], str]:
     if title_match:
         raw_title = title_match.group(1)
         event_title = raw_title.split(" | ")[0].split(" Tickets")[0].strip()
+        # Strip "For Sale: " / "For Trade: " / "For Miracle: " prefixes
+        event_title = re.sub(r"^For (?:Sale|Trade|Miracle):\s*", "", event_title, flags=re.IGNORECASE)
 
     # If product_id in URL, use it directly
     if product_id:
@@ -129,10 +139,12 @@ def extract_event_from_url(url_or_path: str) -> tuple[str, list[dict], str]:
 
 def fetch_all_listings(event_product_uids: list[str]) -> list[dict]:
     """Fetch all ticket listings for given event_product UIDs."""
+    import time
     all_results = []
     offset = 1
     page_size = 50
     session = requests.Session()
+    request_count = 0
 
     while True:
         parts = [f"event_product[]={uid}" for uid in event_product_uids]
@@ -143,7 +155,21 @@ def fetch_all_listings(event_product_uids: list[str]) -> list[dict]:
         req = requests.Request("GET", url)
         prepared = req.prepare()
         prepared.url = url  # prevent re-encoding of []
-        resp = session.send(prepared)
+
+        # Throttle: 1 request per second
+        if request_count > 0:
+            time.sleep(1)
+
+        for attempt in range(5):
+            resp = session.send(prepared)
+            if resp.status_code == 429:
+                wait = min(5 * (attempt + 1), 30)
+                console.print(f"  Rate limited, retrying in {wait}s...", style="yellow")
+                time.sleep(wait)
+                continue
+            break
+        request_count += 1
+
         if resp.status_code != 200:
             console.print(f"[red]API error {resp.status_code}: {resp.text}[/red]")
             resp.raise_for_status()
@@ -214,6 +240,10 @@ def parse_listing(raw: dict, page_url: str, product_meta: dict) -> dict:
             free_price = p.get("price")
     price = gold_price or free_price or (tickets[0].get("price") if tickets else None)
 
+    # Miracle tickets are always free
+    if raw.get("flow") == "miracle":
+        price = 0
+
     # Description — strip HTML
     desc = (raw.get("description", "") or "")
     desc = re.sub(r"<[^>]+>", " ", desc).strip()
@@ -224,23 +254,32 @@ def parse_listing(raw: dict, page_url: str, product_meta: dict) -> dict:
 
     # Event metadata — look up from product_meta via ticket's event_product uid
     event_product_uid = ""
+    ep = {}
     if tickets and tickets[0].get("event_product"):
-        event_product_uid = tickets[0]["event_product"].get("uid", "")
+        ep = tickets[0]["event_product"]
+        event_product_uid = ep.get("uid", "")
     meta = product_meta.get(event_product_uid, {})
 
-    # Fallback: if listing has embedded event_product data, use it directly
-    if not meta and tickets and tickets[0].get("event_product"):
-        ep = tickets[0]["event_product"]
-        meta = {
-            "event_title": "",
-            "event_date": ep.get("start", ""),
-            "ticket_type": ep.get("title", ""),
-        }
+    # Build event_title: prefer product_meta, fall back to listing's embedded event data
+    event_title = meta.get("event_title", "")
+    if not event_title and tickets and tickets[0].get("event"):
+        ev = tickets[0]["event"]
+        # event.title is sometimes a list like ['Phish at Sphere']
+        ev_title = ev.get("title", "")
+        if isinstance(ev_title, list):
+            ev_title = ev_title[0] if ev_title else ""
+        # Strip "For Sale: " / "For Trade: " / "For Miracle: " prefixes
+        ev_title = re.sub(r"^(?:For (?:Sale|Trade|Miracle):\s*)", "", ev_title, flags=re.IGNORECASE)
+        event_title = ev_title
+
+    # Build event_date and ticket_type: prefer product_meta, fall back to embedded event_product
+    event_date = meta.get("event_date", "") or ep.get("start", "")
+    ticket_type = meta.get("ticket_type", "") or ep.get("title", "")
 
     return {
-        "event_title": meta.get("event_title", ""),
-        "event_date": meta.get("event_date", ""),
-        "ticket_type": meta.get("ticket_type", ""),
+        "event_title": event_title,
+        "event_date": event_date,
+        "ticket_type": ticket_type,
         "flow": raw.get("flow", ""),
         "num_tickets": num_tickets,
         "price": price,
@@ -295,6 +334,11 @@ def apply_filters(listings: list[dict], args) -> list[dict]:
             if any(p in l["section"].lower() or p in l["section_raw"].lower() for p in patterns)
         ]
 
+    # Row filter (range, e.g. --row 1-10)
+    if args.row:
+        lo, hi = parse_tickets_arg(args.row)  # reuse: "5" -> (5,5), "1-10" -> (1,10)
+        filtered = [l for l in filtered if l["row"].isdigit() and lo <= int(l["row"]) <= hi]
+
     # Price filters
     if args.min_price is not None:
         filtered = [l for l in filtered if l["price"] is not None and l["price"] >= args.min_price]
@@ -328,12 +372,15 @@ def sort_listings(listings: list[dict], sort_key: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def format_listed(created: str) -> str:
-    """Format a created timestamp for display."""
+    """Format a created timestamp for display in local time."""
     if not created:
         return ""
     try:
-        dt = datetime.strptime(created, "%Y-%m-%d %H:%M:%S")
-        return dt.strftime("%m/%d %-I:%M%p").lower()
+        from zoneinfo import ZoneInfo
+        # API returns UTC timestamps
+        dt_utc = datetime.strptime(created, "%Y-%m-%d %H:%M:%S").replace(tzinfo=ZoneInfo("UTC"))
+        dt_local = dt_utc.astimezone()
+        return dt_local.strftime("%m/%d %-I:%M%p").lower()
     except (ValueError, TypeError):
         return created[:10]
 
@@ -359,7 +406,6 @@ def display_listings(listings: list[dict], event_title: str):
     table.add_column("Date", width=10, no_wrap=True)
     table.add_column("Type", width=15, no_wrap=True, overflow="ellipsis")
     table.add_column("Listed", width=14, no_wrap=True)
-    table.add_column("Flow", width=7, no_wrap=True)
     table.add_column("Qty", width=3, justify="center", no_wrap=True)
     table.add_column("Price", justify="right", width=9, no_wrap=True)
     table.add_column("Section", width=12, no_wrap=True)
@@ -368,16 +414,6 @@ def display_listings(listings: list[dict], event_title: str):
     table.add_column("Description", ratio=1, overflow="fold")
 
     for l in listings:
-        flow = l["flow"]
-        if flow == "sale":
-            flow_text = Text("Sale", style="green")
-        elif flow == "trade":
-            flow_text = Text("Trade", style="yellow")
-        elif flow == "miracle":
-            flow_text = Text("Miracle", style="cyan")
-        else:
-            flow_text = Text(flow)
-
         price_str = f"${l['price']:.2f}" if l["price"] is not None else "N/A"
         price_text = Text(price_str)
         if l["link"]:
@@ -405,7 +441,6 @@ def display_listings(listings: list[dict], event_title: str):
             event_date_str,
             l["ticket_type"],
             listed_str,
-            flow_text,
             str(l["num_tickets"]),
             price_text,
             l["section"],
@@ -438,20 +473,19 @@ def render_html(listings: list[dict], title: str, group_by_event: bool = False) 
         if not created:
             return ""
         try:
-            dt = datetime.strptime(created, "%Y-%m-%d %H:%M:%S")
-            return dt.strftime("%m/%d %-I:%M%p").lower()
+            from zoneinfo import ZoneInfo
+            dt_utc = datetime.strptime(created, "%Y-%m-%d %H:%M:%S").replace(tzinfo=ZoneInfo("UTC"))
+            dt_local = dt_utc.astimezone()
+            return dt_local.strftime("%m/%d %-I:%M%p").lower()
         except (ValueError, TypeError):
             return created[:10]
-
-    def flow_color(flow):
-        return {"sale": "#2d8a4e", "miracle": "#0891b2", "trade": "#ca8a04"}.get(flow, "#666")
 
     def render_table(rows, table_title, show_event_col):
         """Render one <table> block."""
         headers = []
         if show_event_col:
             headers.append("Event")
-        headers.extend(["Date", "Ticket Type", "Listed", "Flow", "Qty", "Price",
+        headers.extend(["Date", "Ticket Type", "Listed", "Qty", "Price",
                          "Section", "Row", "Seats", "Description"])
 
         header_html = "".join(f'<th onclick="sortTable(this)">{h}</th>' for h in headers)
@@ -467,8 +501,6 @@ def render_html(listings: list[dict], title: str, group_by_event: bool = False) 
             else:
                 price_cell = price_str
 
-            flow_html = f'<span style="color:{flow_color(l["flow"])};font-weight:600">{l["flow"].title()}</span>'
-
             desc = l["description"]
             if l["is_sold"]:
                 desc = f"[SOLD] {desc}"
@@ -480,7 +512,6 @@ def render_html(listings: list[dict], title: str, group_by_event: bool = False) 
                 f"<td>{format_event_date(l['event_date'])}</td>",
                 f"<td>{l['ticket_type']}</td>",
                 f"<td>{format_listed_html(l['created'])}</td>",
-                f"<td>{flow_html}</td>",
                 f'<td style="text-align:center">{l["num_tickets"]}</td>',
                 f'<td style="text-align:right;font-weight:600">{price_cell}</td>',
                 f"<td>{l['section']}</td>",
@@ -625,6 +656,8 @@ Examples:
                         help="Number of tickets: exact (e.g. 2) or range (e.g. 2-4)")
     parser.add_argument("--section", nargs="+",
                         help="Filter by section(s), partial match (e.g. 108 109 GA)")
+    parser.add_argument("--row",
+                        help="Filter by row: exact (e.g. 5) or range (e.g. 1-10)")
     parser.add_argument("--min-price", type=float, help="Minimum price per ticket")
     parser.add_argument("--max-price", type=float, help="Maximum price per ticket")
     parser.add_argument("--sold", action="store_true",
@@ -646,9 +679,12 @@ Examples:
         except ValueError:
             parser.error("--tickets must be a number (e.g. 2) or range (e.g. 2-4)")
 
+    import time
     all_parsed = []
 
-    for url in args.urls:
+    for i, url in enumerate(args.urls):
+        if i > 0:
+            time.sleep(2)  # pace requests between events
         console.print(f"Loading event from: [dim]{url}[/dim]")
         event_title, products, page_url = extract_event_from_url(url)
         product_uids = [p["uid"] for p in products]
@@ -723,7 +759,7 @@ Examples:
             f.write(html)
             html_path = f.name
 
-        console.print(f"Opening: [link file://{html_path}]{html_path}[/link]")
+        console.print(f"Opening: {html_path}")
         webbrowser.open(f"file://{html_path}")
 
 
