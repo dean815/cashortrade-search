@@ -319,61 +319,70 @@ def format_listed(created: str) -> str:
 
 
 def display_listings(listings: list[dict], event_title: str):
-    """Display listings in a rich table with details below."""
+    """Display listings in a rich table."""
+    import shutil
+    term_width = shutil.get_terminal_size().columns
+    # Ensure table is at least 120 cols wide so Description gets space
+    table_width = max(term_width, 120)
+
     table = Table(
         title=f"{event_title}  ({len(listings)} listings)",
-        show_lines=False,
+        show_lines=True,
         pad_edge=True,
+        width=table_width,
     )
 
-    table.add_column("#", style="dim", width=4, justify="right")
-    table.add_column("Qty", width=3, justify="center")
-    table.add_column("Price", justify="right", min_width=9)
-    table.add_column("Section", min_width=14)
-    table.add_column("Row", width=4)
-    table.add_column("Seats", min_width=14)
+    table.add_column("Listed", width=14, no_wrap=True)
+    table.add_column("Type", width=7, no_wrap=True)
+    table.add_column("Qty", width=3, justify="center", no_wrap=True)
+    table.add_column("Price", justify="right", width=9, no_wrap=True)
+    table.add_column("Section", width=12, no_wrap=True)
+    table.add_column("Row", width=3, no_wrap=True)
+    table.add_column("Seats", width=12, no_wrap=True, overflow="ellipsis")
+    table.add_column("Description", ratio=1, overflow="fold")
 
-    details = []
+    for l in listings:
+        # Type — color-coded
+        flow = l["flow"]
+        if flow == "sale":
+            flow_text = Text("Sale", style="green")
+        elif flow == "trade":
+            flow_text = Text("Trade", style="yellow")
+        elif flow == "miracle":
+            flow_text = Text("Miracle", style="cyan")
+        else:
+            flow_text = Text(flow)
 
-    for i, l in enumerate(listings, 1):
+        # Price — hyperlinked to listing
         price_str = f"${l['price']:.2f}" if l["price"] is not None else "N/A"
+        price_text = Text(price_str)
+        if l["link"]:
+            price_text.stylize(f"link {l['link']}")
+
+        # Listed
+        listed_str = format_listed(l["created"])
+
+        # Sold row style
         row_style = "dim" if l["is_sold"] else ""
 
+        # Description
+        desc = l["description"]
+        if l["is_sold"]:
+            desc = f"[SOLD] {desc}"
+
         table.add_row(
-            str(i),
+            listed_str,
+            flow_text,
             str(l["num_tickets"]),
-            price_str,
+            price_text,
             l["section"],
             l["row"] or "-",
             l["seats"] or "-",
+            desc,
             style=row_style,
         )
 
-        details.append({
-            "num": i,
-            "flow": l["flow"],
-            "desc": l["description"],
-            "listed": format_listed(l["created"]),
-            "link": l["link"],
-            "is_sold": l["is_sold"],
-        })
-
     console.print(table)
-
-    # Print details for each listing below
-    if details:
-        console.print("\n[bold]Details:[/bold]")
-        for d in details:
-            sold_tag = " [dim]SOLD[/dim]" if d["is_sold"] else ""
-            flow = d["flow"].capitalize()
-            desc = d["desc"][:120] if d["desc"] else ""
-            parts = [f"  [bold]{d['num']:>3}.[/bold]"]
-            parts.append(f"[{flow}]")
-            if desc:
-                parts.append(f"{desc}")
-            parts.append(f"[dim]Listed {d['listed']}[/dim]{sold_tag}")
-            console.print(" ".join(parts))
-            console.print(f"       {d['link']}")
 
 
 # ---------------------------------------------------------------------------
