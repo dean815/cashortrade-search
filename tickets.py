@@ -420,6 +420,185 @@ def display_listings(listings: list[dict], event_title: str):
     console.print(table)
 
 
+def render_html(listings: list[dict], title: str, group_by_event: bool = False) -> str:
+    """Render listings as a self-contained HTML string."""
+
+    # Check if multiple events present
+    multi_event = len(set(l["event_title"] for l in listings)) > 1
+
+    def format_event_date(date_str):
+        if not date_str:
+            return ""
+        try:
+            dt = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+            return dt.strftime("%m/%d/%Y")
+        except (ValueError, TypeError):
+            return date_str[:10]
+
+    def format_listed_html(created):
+        if not created:
+            return ""
+        try:
+            dt = datetime.strptime(created, "%Y-%m-%d %H:%M:%S")
+            return dt.strftime("%m/%d %-I:%M%p").lower()
+        except (ValueError, TypeError):
+            return created[:10]
+
+    def flow_color(flow):
+        return {"sale": "#2d8a4e", "miracle": "#0891b2", "trade": "#ca8a04"}.get(flow, "#666")
+
+    def render_table(rows, table_title, show_event_col):
+        """Render one <table> block."""
+        headers = []
+        if show_event_col:
+            headers.append("Event")
+        headers.extend(["Date", "Ticket Type", "Listed", "Flow", "Qty", "Price",
+                         "Section", "Row", "Seats", "Description"])
+
+        header_html = "".join(f'<th onclick="sortTable(this)">{h}</th>' for h in headers)
+
+        row_htmls = []
+        for i, l in enumerate(rows):
+            zebra = " even" if i % 2 == 0 else " odd"
+            cls = f'class="{zebra.strip()}{" sold" if l["is_sold"] else ""}"'
+
+            price_str = f"${l['price']:.2f}" if l["price"] is not None else "N/A"
+            if l["link"]:
+                price_cell = f'<a href="{l["link"]}">{price_str}</a>'
+            else:
+                price_cell = price_str
+
+            flow_html = f'<span style="color:{flow_color(l["flow"])};font-weight:600">{l["flow"].title()}</span>'
+
+            desc = l["description"]
+            if l["is_sold"]:
+                desc = f"[SOLD] {desc}"
+
+            cells = []
+            if show_event_col:
+                cells.append(f"<td>{l['event_title']}</td>")
+            cells.extend([
+                f"<td>{format_event_date(l['event_date'])}</td>",
+                f"<td>{l['ticket_type']}</td>",
+                f"<td>{format_listed_html(l['created'])}</td>",
+                f"<td>{flow_html}</td>",
+                f'<td style="text-align:center">{l["num_tickets"]}</td>',
+                f'<td style="text-align:right;font-weight:600">{price_cell}</td>',
+                f"<td>{l['section']}</td>",
+                f"<td>{l['row'] or '-'}</td>",
+                f"<td>{l['seats'] or '-'}</td>",
+                f"<td>{desc}</td>",
+            ])
+
+            row_htmls.append(f"<tr {cls}>{''.join(cells)}</tr>")
+
+        # Price summary
+        prices = [l["price"] for l in rows if l["price"] is not None and not l["is_sold"]]
+        summary_html = ""
+        if prices:
+            summary_html = (
+                f'<div class="price-summary">'
+                f'<strong>Price summary:</strong> '
+                f'Min: ${min(prices):.2f} &nbsp;|&nbsp; '
+                f'Max: ${max(prices):.2f} &nbsp;|&nbsp; '
+                f'Avg: ${sum(prices)/len(prices):.2f} &nbsp;|&nbsp; '
+                f'Median: ${sorted(prices)[len(prices)//2]:.2f}'
+                f'</div>'
+            )
+
+        return f"""
+        <div class="table-section">
+            <h2>{table_title} ({len(rows)} listings)</h2>
+            <table>
+                <thead><tr>{header_html}</tr></thead>
+                <tbody>{"".join(row_htmls)}</tbody>
+            </table>
+            {summary_html}
+        </div>
+        """
+
+    # Build table sections
+    if group_by_event:
+        from collections import OrderedDict
+        groups = OrderedDict()
+        for l in listings:
+            key = l["event_title"] or "Unknown Event"
+            groups.setdefault(key, []).append(l)
+        tables_html = "".join(
+            render_table(group, name, show_event_col=False)
+            for name, group in groups.items()
+        )
+    else:
+        tables_html = render_table(listings, title, show_event_col=multi_event)
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<style>
+    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+           background: #f8f9fa; color: #333; padding: 20px; }}
+    h1 {{ font-size: 1.5rem; margin-bottom: 16px; color: #1a1a1a; }}
+    h2 {{ font-size: 1.2rem; margin-bottom: 8px; color: #1a1a1a; }}
+    .table-section {{ margin-bottom: 32px; }}
+    table {{ width: 100%; border-collapse: collapse; background: #fff;
+             box-shadow: 0 1px 3px rgba(0,0,0,0.1); font-size: 0.85rem; }}
+    th {{ background: #1a1a1a; color: #fff; padding: 10px 12px; text-align: left;
+          cursor: pointer; user-select: none; white-space: nowrap; }}
+    th:hover {{ background: #333; }}
+    th::after {{ content: " \\2195"; opacity: 0.4; font-size: 0.75em; }}
+    td {{ padding: 8px 12px; border-bottom: 1px solid #e9ecef; vertical-align: top; }}
+    tr.even {{ background: #fff; }}
+    tr.odd {{ background: #f8f9fa; }}
+    tr:hover {{ background: #e9ecef; }}
+    tr.sold {{ opacity: 0.5; }}
+    tr.sold td {{ text-decoration: line-through; }}
+    a {{ color: #0066cc; text-decoration: none; }}
+    a:hover {{ text-decoration: underline; }}
+    .price-summary {{ margin-top: 12px; padding: 10px 14px; background: #e9ecef;
+                      border-radius: 6px; font-size: 0.9rem; }}
+</style>
+</head>
+<body>
+<h1>{title}</h1>
+{tables_html}
+<script>
+function sortTable(th) {{
+    const table = th.closest('table');
+    const tbody = table.querySelector('tbody');
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+    const idx = Array.from(th.parentNode.children).indexOf(th);
+    const dir = th.dataset.dir === 'asc' ? 'desc' : 'asc';
+    th.parentNode.querySelectorAll('th').forEach(h => delete h.dataset.dir);
+    th.dataset.dir = dir;
+
+    rows.sort((a, b) => {{
+        let av = a.children[idx].textContent.trim();
+        let bv = b.children[idx].textContent.trim();
+        // Try numeric sort (strip $ and commas)
+        const an = parseFloat(av.replace(/[$,]/g, ''));
+        const bn = parseFloat(bv.replace(/[$,]/g, ''));
+        if (!isNaN(an) && !isNaN(bn)) {{
+            return dir === 'asc' ? an - bn : bn - an;
+        }}
+        return dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+    }});
+
+    // Re-apply zebra striping
+    rows.forEach((row, i) => {{
+        row.classList.remove('even', 'odd');
+        row.classList.add(i % 2 === 0 ? 'even' : 'odd');
+        tbody.appendChild(row);
+    }});
+}}
+</script>
+</body>
+</html>"""
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
