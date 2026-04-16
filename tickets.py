@@ -3,20 +3,23 @@
 CashorTrade Search Tool - Search, filter, and sort ticket listings from cashortrade.org
 
 Usage:
-    python cot.py "https://cashortrade.org/.../event/{id}" [options]
-    python cot.py "https://cashortrade.org/.../event/{id}/product/{id}" [options]
+    python tickets.py "URL1" ["URL2" ...] [options]
 
 Examples:
-    python cot.py "https://cashortrade.org/phish-at-sphere-tickets/event/3d4f8df0-..." --max-price 200
-    python cot.py "URL" --type sale --tickets 2 --section 108 109 --sort price
-    python cot.py "URL" --type sale miracle --tickets 2-4 --sort date
-    python cot.py "URL" --sold --sort price-desc
+    python tickets.py "https://cashortrade.org/phish-at-sphere-tickets/event/3d4f8df0-..."
+    python tickets.py "URL1" "URL2" --max-price 200 --sort price
+    python tickets.py "URL" --type sale --tickets 2 --section 108 109 --sort price
+    python tickets.py "URL" --terminal --sort price-desc
+    python tickets.py "URL1" "URL2" --group-by-event
 """
 
 import argparse
 import json
 import re
 import sys
+import tempfile
+import webbrowser
+from datetime import datetime
 
 import requests
 from rich.console import Console
