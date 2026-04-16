@@ -343,8 +343,10 @@ def display_listings(listings: list[dict], event_title: str):
     """Display listings in a rich table."""
     import shutil
     term_width = shutil.get_terminal_size().columns
-    # Ensure table is at least 120 cols wide so Description gets space
-    table_width = max(term_width, 120)
+    table_width = max(term_width, 160)
+
+    # Check if we need event-level columns (multiple events in one table)
+    multi_event = len(set(l["event_title"] for l in listings)) > 1
 
     table = Table(
         title=f"{event_title}  ({len(listings)} listings)",
@@ -353,8 +355,12 @@ def display_listings(listings: list[dict], event_title: str):
         width=table_width,
     )
 
+    if multi_event:
+        table.add_column("Event", width=25, no_wrap=True, overflow="ellipsis")
+    table.add_column("Date", width=10, no_wrap=True)
+    table.add_column("Type", width=15, no_wrap=True, overflow="ellipsis")
     table.add_column("Listed", width=14, no_wrap=True)
-    table.add_column("Type", width=7, no_wrap=True)
+    table.add_column("Flow", width=7, no_wrap=True)
     table.add_column("Qty", width=3, justify="center", no_wrap=True)
     table.add_column("Price", justify="right", width=9, no_wrap=True)
     table.add_column("Section", width=12, no_wrap=True)
@@ -363,7 +369,6 @@ def display_listings(listings: list[dict], event_title: str):
     table.add_column("Description", ratio=1, overflow="fold")
 
     for l in listings:
-        # Type — color-coded
         flow = l["flow"]
         if flow == "sale":
             flow_text = Text("Sale", style="green")
@@ -374,24 +379,32 @@ def display_listings(listings: list[dict], event_title: str):
         else:
             flow_text = Text(flow)
 
-        # Price — hyperlinked to listing
         price_str = f"${l['price']:.2f}" if l["price"] is not None else "N/A"
         price_text = Text(price_str)
         if l["link"]:
             price_text.stylize(f"link {l['link']}")
 
-        # Listed
         listed_str = format_listed(l["created"])
-
-        # Sold row style
         row_style = "dim" if l["is_sold"] else ""
-
-        # Description
         desc = l["description"]
         if l["is_sold"]:
             desc = f"[SOLD] {desc}"
 
-        table.add_row(
+        # Format event date
+        event_date_str = ""
+        if l["event_date"]:
+            try:
+                dt = datetime.strptime(l["event_date"], "%Y-%m-%d %H:%M:%S")
+                event_date_str = dt.strftime("%m/%d/%Y")
+            except (ValueError, TypeError):
+                event_date_str = l["event_date"][:10]
+
+        row_cells = []
+        if multi_event:
+            row_cells.append(l["event_title"])
+        row_cells.extend([
+            event_date_str,
+            l["ticket_type"],
             listed_str,
             flow_text,
             str(l["num_tickets"]),
@@ -400,8 +413,9 @@ def display_listings(listings: list[dict], event_title: str):
             l["row"] or "-",
             l["seats"] or "-",
             desc,
-            style=row_style,
-        )
+        ])
+
+        table.add_row(*row_cells, style=row_style)
 
     console.print(table)
 
@@ -416,15 +430,16 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s "https://cashortrade.org/phish-at-sphere-tickets/event/3d4f8df0-..."
-  %(prog)s "URL" --max-price 200 --tickets 2 --sort price
+  %(prog)s "URL"
+  %(prog)s "URL1" "URL2" --max-price 200 --sort price
   %(prog)s "URL" --section 108 109 110 --type sale miracle
   %(prog)s "URL" --tickets 2-4 --sort date
-  %(prog)s "URL" --sold --sort price-desc
+  %(prog)s "URL1" "URL2" --group-by-event
+  %(prog)s "URL" --terminal --sold --sort price-desc
         """,
     )
 
-    parser.add_argument("url", help="CashorTrade event URL")
+    parser.add_argument("urls", nargs="+", help="One or more CashorTrade event URLs")
     parser.add_argument("--type", nargs="+", choices=["sale", "trade", "miracle"],
                         default=DEFAULT_TYPES,
                         help="Listing types to show (default: sale miracle)")
@@ -439,6 +454,10 @@ Examples:
     parser.add_argument("--sort", choices=["price", "price-desc", "date", "date-asc"],
                         default="price",
                         help="Sort order (default: price ascending)")
+    parser.add_argument("--terminal", action="store_true",
+                        help="Output to terminal instead of HTML (default: HTML)")
+    parser.add_argument("--group-by-event", action="store_true",
+                        help="Show separate tables per event instead of one merged table")
 
     args = parser.parse_args()
 
@@ -449,32 +468,31 @@ Examples:
         except ValueError:
             parser.error("--tickets must be a number (e.g. 2) or range (e.g. 2-4)")
 
-    # Extract event info from URL
-    console.print("Loading event...")
-    event_title, products, page_url = extract_event_from_url(args.url)
-    product_uids = [p["uid"] for p in products]
+    all_parsed = []
 
-    # Build product metadata lookup: uid -> {event_title, event_date, ticket_type}
-    product_meta = {}
-    for p in products:
-        uid = p["uid"]
-        product_meta[uid] = {
-            "event_title": event_title,
-            "event_date": p.get("start", ""),
-            "ticket_type": p.get("title", ""),
-        }
+    for url in args.urls:
+        console.print(f"Loading event from: [dim]{url}[/dim]")
+        event_title, products, page_url = extract_event_from_url(url)
+        product_uids = [p["uid"] for p in products]
+        console.print(f"  Event: [bold green]{event_title}[/bold green]")
 
-    console.print(f"Event: [bold green]{event_title}[/bold green]")
+        # Build product metadata lookup
+        product_meta = {}
+        for p in products:
+            uid = p["uid"]
+            product_meta[uid] = {
+                "event_title": event_title,
+                "event_date": p.get("start", ""),
+                "ticket_type": p.get("title", ""),
+            }
 
-    # Fetch all listings
-    console.print("Fetching listings...")
-    raw_listings = fetch_all_listings(product_uids)
-
-    # Parse
-    parsed = [parse_listing(r, page_url, product_meta) for r in raw_listings]
+        console.print("  Fetching listings...")
+        raw_listings = fetch_all_listings(product_uids)
+        parsed = [parse_listing(r, page_url, product_meta) for r in raw_listings]
+        all_parsed.extend(parsed)
 
     # Filter
-    filtered = apply_filters(parsed, args)
+    filtered = apply_filters(all_parsed, args)
 
     # Sort
     filtered = sort_listings(filtered, args.sort)
@@ -482,23 +500,40 @@ Examples:
     # Display
     console.print(
         f"\n[bold]{len(filtered)}[/bold] listings"
-        f" (from {len(parsed)} total)\n"
+        f" (from {len(all_parsed)} total)\n"
     )
 
     if not filtered:
         console.print("[yellow]No listings match your filters.[/yellow]")
         return
 
-    display_listings(filtered, event_title)
+    # For now, always use terminal output (HTML comes in Task 4-5)
+    if args.group_by_event:
+        from collections import OrderedDict
+        groups = OrderedDict()
+        for l in filtered:
+            key = l["event_title"] or "Unknown Event"
+            groups.setdefault(key, []).append(l)
 
-    # Price summary
-    prices = [l["price"] for l in filtered if l["price"] is not None and not l["is_sold"]]
-    if prices:
-        console.print(f"\n[bold]Price summary:[/bold]  "
-                       f"Min: ${min(prices):.2f}  |  "
-                       f"Max: ${max(prices):.2f}  |  "
-                       f"Avg: ${sum(prices)/len(prices):.2f}  |  "
-                       f"Median: ${sorted(prices)[len(prices)//2]:.2f}")
+        for event_name, group_listings in groups.items():
+            display_listings(group_listings, event_name)
+            prices = [l["price"] for l in group_listings if l["price"] is not None and not l["is_sold"]]
+            if prices:
+                console.print(f"\n[bold]Price summary:[/bold]  "
+                              f"Min: ${min(prices):.2f}  |  "
+                              f"Max: ${max(prices):.2f}  |  "
+                              f"Avg: ${sum(prices)/len(prices):.2f}  |  "
+                              f"Median: ${sorted(prices)[len(prices)//2]:.2f}\n")
+    else:
+        title = "All Events" if len(args.urls) > 1 else (filtered[0]["event_title"] if filtered else "Unknown")
+        display_listings(filtered, title)
+        prices = [l["price"] for l in filtered if l["price"] is not None and not l["is_sold"]]
+        if prices:
+            console.print(f"\n[bold]Price summary:[/bold]  "
+                          f"Min: ${min(prices):.2f}  |  "
+                          f"Max: ${max(prices):.2f}  |  "
+                          f"Avg: ${sum(prices)/len(prices):.2f}  |  "
+                          f"Median: ${sorted(prices)[len(prices)//2]:.2f}")
 
 
 if __name__ == "__main__":
