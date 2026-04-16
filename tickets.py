@@ -686,33 +686,46 @@ Examples:
         console.print("[yellow]No listings match your filters.[/yellow]")
         return
 
-    # For now, always use terminal output (HTML comes in Task 4-5)
-    if args.group_by_event:
-        from collections import OrderedDict
-        groups = OrderedDict()
-        for l in filtered:
-            key = l["event_title"] or "Unknown Event"
-            groups.setdefault(key, []).append(l)
-
-        for event_name, group_listings in groups.items():
-            display_listings(group_listings, event_name)
-            prices = [l["price"] for l in group_listings if l["price"] is not None and not l["is_sold"]]
+    if args.terminal:
+        # Terminal output
+        if args.group_by_event:
+            from collections import OrderedDict
+            groups = OrderedDict()
+            for l in filtered:
+                key = l["event_title"] or "Unknown Event"
+                groups.setdefault(key, []).append(l)
+            for event_name, group_listings in groups.items():
+                display_listings(group_listings, event_name)
+                prices = [l["price"] for l in group_listings if l["price"] is not None and not l["is_sold"]]
+                if prices:
+                    console.print(f"\n[bold]Price summary:[/bold]  "
+                                  f"Min: ${min(prices):.2f}  |  "
+                                  f"Max: ${max(prices):.2f}  |  "
+                                  f"Avg: ${sum(prices)/len(prices):.2f}  |  "
+                                  f"Median: ${sorted(prices)[len(prices)//2]:.2f}\n")
+        else:
+            title = "All Events" if len(args.urls) > 1 else (filtered[0]["event_title"] if filtered else "Unknown")
+            display_listings(filtered, title)
+            prices = [l["price"] for l in filtered if l["price"] is not None and not l["is_sold"]]
             if prices:
                 console.print(f"\n[bold]Price summary:[/bold]  "
                               f"Min: ${min(prices):.2f}  |  "
                               f"Max: ${max(prices):.2f}  |  "
                               f"Avg: ${sum(prices)/len(prices):.2f}  |  "
-                              f"Median: ${sorted(prices)[len(prices)//2]:.2f}\n")
+                              f"Median: ${sorted(prices)[len(prices)//2]:.2f}")
     else:
+        # HTML output (default)
         title = "All Events" if len(args.urls) > 1 else (filtered[0]["event_title"] if filtered else "Unknown")
-        display_listings(filtered, title)
-        prices = [l["price"] for l in filtered if l["price"] is not None and not l["is_sold"]]
-        if prices:
-            console.print(f"\n[bold]Price summary:[/bold]  "
-                          f"Min: ${min(prices):.2f}  |  "
-                          f"Max: ${max(prices):.2f}  |  "
-                          f"Avg: ${sum(prices)/len(prices):.2f}  |  "
-                          f"Median: ${sorted(prices)[len(prices)//2]:.2f}")
+        html = render_html(filtered, title, group_by_event=args.group_by_event)
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".html", prefix="tickets-", dir="/tmp", delete=False
+        ) as f:
+            f.write(html)
+            html_path = f.name
+
+        console.print(f"Opening: [link file://{html_path}]{html_path}[/link]")
+        webbrowser.open(f"file://{html_path}")
 
 
 if __name__ == "__main__":
