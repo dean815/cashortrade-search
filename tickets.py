@@ -224,10 +224,14 @@ def parse_listing(raw: dict, page_url: str, product_meta: dict) -> dict:
     # Number of tickets
     num_tickets = len(tickets)
 
-    # Sold status
-    all_sold = all(t.get("sold") for t in tickets) if tickets else False
+    # Sold status. `ticket.sold` is either falsy or a timestamp string
+    # (e.g. "2026-04-21 01:21:21") — we use the latest such timestamp as
+    # the listing's sold-at time.
+    sold_timestamps = [t.get("sold") for t in tickets if isinstance(t.get("sold"), str) and t.get("sold")]
+    all_sold = bool(tickets) and len(sold_timestamps) == len(tickets)
     status = raw.get("status", "")
     is_sold = all_sold or status in ("accepted", "finalized-success")
+    sold_at = max(sold_timestamps) if sold_timestamps else ""
 
     # Price (Gold membership price preferred, then Free tier)
     prices_by_membership = raw.get("prices_by_membership", [])
@@ -291,6 +295,7 @@ def parse_listing(raw: dict, page_url: str, product_meta: dict) -> dict:
         "link": link,
         "created": raw.get("created", ""),
         "is_sold": is_sold,
+        "sold_at": sold_at,
         "uid": raw.get("uid", ""),
     }
 
@@ -309,12 +314,8 @@ def parse_tickets_arg(value: str) -> tuple[int, int]:
 
 
 def apply_filters(listings: list[dict], args) -> list[dict]:
-    """Apply user-specified filters."""
+    """Apply user-specified filters (excluding sold/active split — that's done in main)."""
     filtered = listings
-
-    # Sold filter (default: exclude sold)
-    if not args.sold:
-        filtered = [l for l in filtered if not l["is_sold"]]
 
     # Type filter
     if args.type:
@@ -334,10 +335,15 @@ def apply_filters(listings: list[dict], args) -> list[dict]:
             if any(p in l["section"].lower() or p in l["section_raw"].lower() for p in patterns)
         ]
 
-    # Row filter (range, e.g. --row 1-10)
+    # Row filter (range, e.g. --row 1-10). Listings without a numeric row
+    # (GA / Floor / Pit / etc.) are always included — the filter only applies
+    # to seated sections.
     if args.row:
         lo, hi = parse_tickets_arg(args.row)  # reuse: "5" -> (5,5), "1-10" -> (1,10)
-        filtered = [l for l in filtered if l["row"].isdigit() and lo <= int(l["row"]) <= hi]
+        filtered = [
+            l for l in filtered
+            if not l["row"].isdigit() or lo <= int(l["row"]) <= hi
+        ]
 
     # Price filters
     if args.min_price is not None:
@@ -385,8 +391,9 @@ def format_listed(created: str) -> str:
         return created[:10]
 
 
-def display_listings(listings: list[dict], event_title: str):
-    """Display listings in a rich table."""
+def display_listings(listings: list[dict], event_title: str, show_sold_col: bool = False):
+    """Display listings in a rich table. Pass show_sold_col=True for the
+    sold-only view (adds a 'Sold' column with the time-sold timestamp)."""
     import shutil
     term_width = shutil.get_terminal_size().columns
     table_width = max(term_width, 160)
@@ -406,6 +413,8 @@ def display_listings(listings: list[dict], event_title: str):
     table.add_column("Date", width=10, no_wrap=True)
     table.add_column("Type", width=15, no_wrap=True, overflow="ellipsis")
     table.add_column("Listed", width=14, no_wrap=True)
+    if show_sold_col:
+        table.add_column("Sold", width=14, no_wrap=True)
     table.add_column("Qty", width=3, justify="center", no_wrap=True)
     table.add_column("Price", justify="right", width=9, no_wrap=True)
     table.add_column("Section", width=12, no_wrap=True)
@@ -420,9 +429,10 @@ def display_listings(listings: list[dict], event_title: str):
             price_text.stylize(f"link {l['link']}")
 
         listed_str = format_listed(l["created"])
-        row_style = "dim" if l["is_sold"] else ""
+        sold_str = format_listed(l.get("sold_at", "")) if show_sold_col else ""
+        row_style = "dim" if l["is_sold"] and not show_sold_col else ""
         desc = l["description"]
-        if l["is_sold"]:
+        if l["is_sold"] and not show_sold_col:
             desc = f"[SOLD] {desc}"
 
         # Format event date
@@ -441,6 +451,10 @@ def display_listings(listings: list[dict], event_title: str):
             event_date_str,
             l["ticket_type"],
             listed_str,
+        ])
+        if show_sold_col:
+            row_cells.append(sold_str)
+        row_cells.extend([
             str(l["num_tickets"]),
             price_text,
             l["section"],
@@ -454,11 +468,16 @@ def display_listings(listings: list[dict], event_title: str):
     console.print(table)
 
 
-def render_html(listings: list[dict], title: str, group_by_event: bool = False) -> str:
-    """Render listings as a self-contained HTML string."""
+def render_html(active: list[dict], sold: list[dict], title: str, group_by_event: bool = False) -> str:
+    """Render active + sold listings as a self-contained HTML string.
 
-    # Check if multiple events present
-    multi_event = len(set(l["event_title"] for l in listings)) > 1
+    Active listings are rendered in the primary table; sold listings are
+    rendered in a second table below with an extra 'Sold' column. When
+    `group_by_event` is True, both tables are emitted per group."""
+
+    # Check if multiple events present (look at combined set so the Event
+    # column appears consistently across both tables)
+    multi_event = len(set(l["event_title"] for l in (active + sold))) > 1
 
     def format_event_date(date_str):
         if not date_str:
@@ -480,20 +499,26 @@ def render_html(listings: list[dict], title: str, group_by_event: bool = False) 
         except (ValueError, TypeError):
             return created[:10]
 
-    def render_table(rows, table_title, show_event_col):
-        """Render one <table> block."""
+    def render_table(rows, table_title, show_event_col, show_sold_col=False):
+        """Render one <table> block. When show_sold_col=True, adds a
+        'Sold' column (time sold) — used for the sold-listings view."""
         headers = []
         if show_event_col:
             headers.append("Event")
-        headers.extend(["Date", "Ticket Type", "Listed", "Qty", "Price",
-                         "Section", "Row", "Seats", "Description"])
+        headers.extend(["Date", "Ticket Type", "Listed"])
+        if show_sold_col:
+            headers.append("Sold")
+        headers.extend(["Qty", "Price", "Section", "Row", "Seats", "Description"])
 
         header_html = "".join(f'<th onclick="sortTable(this)">{h}</th>' for h in headers)
 
         row_htmls = []
         for i, l in enumerate(rows):
             zebra = " even" if i % 2 == 0 else " odd"
-            cls = f'class="{zebra.strip()}{" sold" if l["is_sold"] else ""}"'
+            # In the sold table don't apply the 'sold' row styling (line-through
+            # / faded) — every row is sold, so it's just noise.
+            sold_cls = " sold" if l["is_sold"] and not show_sold_col else ""
+            cls = f'class="{zebra.strip()}{sold_cls}"'
 
             price_str = f"${l['price']:.2f}" if l["price"] is not None else "N/A"
             if l["link"]:
@@ -502,7 +527,7 @@ def render_html(listings: list[dict], title: str, group_by_event: bool = False) 
                 price_cell = price_str
 
             desc = l["description"]
-            if l["is_sold"]:
+            if l["is_sold"] and not show_sold_col:
                 desc = f"[SOLD] {desc}"
 
             cells = []
@@ -512,6 +537,10 @@ def render_html(listings: list[dict], title: str, group_by_event: bool = False) 
                 f"<td>{format_event_date(l['event_date'])}</td>",
                 f"<td>{l['ticket_type']}</td>",
                 f"<td>{format_listed_html(l['created'])}</td>",
+            ])
+            if show_sold_col:
+                cells.append(f"<td>{format_listed_html(l.get('sold_at', ''))}</td>")
+            cells.extend([
                 f'<td style="text-align:center">{l["num_tickets"]}</td>',
                 f'<td style="text-align:right;font-weight:600">{price_cell}</td>',
                 f"<td>{l['section']}</td>",
@@ -522,8 +551,13 @@ def render_html(listings: list[dict], title: str, group_by_event: bool = False) 
 
             row_htmls.append(f"<tr {cls}>{''.join(cells)}</tr>")
 
-        # Price summary
-        prices = [l["price"] for l in rows if l["price"] is not None and not l["is_sold"]]
+        # Price summary — for active tables use non-sold listings; for the
+        # sold view summarize the sold prices so the user can see what things
+        # actually cleared at.
+        if show_sold_col:
+            prices = [l["price"] for l in rows if l["price"] is not None]
+        else:
+            prices = [l["price"] for l in rows if l["price"] is not None and not l["is_sold"]]
         summary_html = ""
         if prices:
             summary_html = (
@@ -547,19 +581,62 @@ def render_html(listings: list[dict], title: str, group_by_event: bool = False) 
         </div>
         """
 
+    def _key(l):
+        return (
+            l["event_title"] or "Unknown Event",
+            l["ticket_type"] or "",
+            l["event_date"] or "",
+        )
+
+    def group_title(key):
+        event_title, ticket_type, event_date = key
+        parts = [event_title]
+        if ticket_type:
+            parts.append(ticket_type)
+        if event_date:
+            parts.append(format_event_date(event_date))
+        return " — ".join(parts)
+
     # Build table sections
+    sections = []
     if group_by_event:
         from collections import OrderedDict
-        groups = OrderedDict()
-        for l in listings:
-            key = l["event_title"] or "Unknown Event"
-            groups.setdefault(key, []).append(l)
-        tables_html = "".join(
-            render_table(group, name, show_event_col=False)
-            for name, group in groups.items()
-        )
+        # Preserve order of first appearance across active+sold
+        key_order = OrderedDict()
+        active_groups = {}
+        sold_groups = {}
+        for l in active:
+            k = _key(l)
+            key_order.setdefault(k, None)
+            active_groups.setdefault(k, []).append(l)
+        for l in sold:
+            k = _key(l)
+            key_order.setdefault(k, None)
+            sold_groups.setdefault(k, []).append(l)
+
+        for k in key_order:
+            heading = group_title(k)
+            if active_groups.get(k):
+                sections.append(render_table(active_groups[k], heading, show_event_col=False))
+            if sold_groups.get(k):
+                sections.append(render_table(
+                    sold_groups[k],
+                    f"{heading} — Sold",
+                    show_event_col=False,
+                    show_sold_col=True,
+                ))
     else:
-        tables_html = render_table(listings, title, show_event_col=multi_event)
+        if active:
+            sections.append(render_table(active, title, show_event_col=multi_event))
+        if sold:
+            sections.append(render_table(
+                sold,
+                f"{title} — Sold",
+                show_event_col=multi_event,
+                show_sold_col=True,
+            ))
+
+    tables_html = "".join(sections)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -660,8 +737,11 @@ Examples:
                         help="Filter by row: exact (e.g. 5) or range (e.g. 1-10)")
     parser.add_argument("--min-price", type=float, help="Minimum price per ticket")
     parser.add_argument("--max-price", type=float, help="Maximum price per ticket")
-    parser.add_argument("--sold", action="store_true",
-                        help="Include sold listings (excluded by default)")
+    parser.add_argument("--show-sold", "--sold", dest="show_sold", action="store_true",
+                        help="Also show a separate section with sold listings "
+                             "(includes a 'Sold' column with time sold)")
+    parser.add_argument("--show-only-sold", dest="show_only_sold", action="store_true",
+                        help="Show ONLY sold listings (hides the active section)")
     parser.add_argument("--sort", choices=["price", "price-desc", "date", "date-asc"],
                         default="price",
                         help="Sort order (default: price ascending)")
@@ -705,53 +785,117 @@ Examples:
         parsed = [parse_listing(r, page_url, product_meta) for r in raw_listings]
         all_parsed.extend(parsed)
 
-    # Filter
+    # Filter (does NOT include the sold/active split — that happens below)
     filtered = apply_filters(all_parsed, args)
 
-    # Sort
-    filtered = sort_listings(filtered, args.sort)
+    # Sold section visibility is controlled by the flags:
+    #   (neither)          -> active only (default, pre-refactor behavior)
+    #   --show-sold        -> active + sold
+    #   --show-only-sold   -> sold only (hides active)
+    show_sold = args.show_sold or args.show_only_sold
+    show_active = not args.show_only_sold
 
-    # Display
-    console.print(
-        f"\n[bold]{len(filtered)}[/bold] listings"
-        f" (from {len(all_parsed)} total)\n"
-    )
+    active = [l for l in filtered if not l["is_sold"]] if show_active else []
+    sold = [l for l in filtered if l["is_sold"]] if show_sold else []
 
-    if not filtered:
+    # Sort: active by user's --sort; sold by time-sold (most recent first)
+    active = sort_listings(active, args.sort)
+    sold = sorted(sold, key=lambda l: l.get("sold_at", ""), reverse=True)
+
+    # Display summary
+    if show_sold and show_active:
+        console.print(
+            f"\n[bold]{len(active)}[/bold] active  +  "
+            f"[bold]{len(sold)}[/bold] sold"
+            f"  (from {len(all_parsed)} total)\n"
+        )
+    elif show_sold:
+        console.print(
+            f"\n[bold]{len(sold)}[/bold] sold listings"
+            f" (from {len(all_parsed)} total)\n"
+        )
+    else:
+        console.print(
+            f"\n[bold]{len(active)}[/bold] listings"
+            f" (from {len(all_parsed)} total)\n"
+        )
+
+    if not active and not sold:
         console.print("[yellow]No listings match your filters.[/yellow]")
         return
 
+    # ---- grouping helpers shared by terminal + HTML paths -----------------
+    def _group_key(l):
+        return (
+            l["event_title"] or "Unknown Event",
+            l["ticket_type"] or "",
+            l["event_date"] or "",
+        )
+
+    def _group_title(key):
+        event_title, ticket_type, event_date = key
+        parts = [event_title]
+        if ticket_type:
+            parts.append(ticket_type)
+        if event_date:
+            try:
+                dt = datetime.strptime(event_date, "%Y-%m-%d %H:%M:%S")
+                parts.append(dt.strftime("%m/%d/%Y"))
+            except (ValueError, TypeError):
+                parts.append(event_date[:10])
+        return " — ".join(parts)
+
+    def _print_price_summary(rows, label="Price summary"):
+        prices = [l["price"] for l in rows if l["price"] is not None]
+        if prices:
+            console.print(f"\n[bold]{label}:[/bold]  "
+                          f"Min: ${min(prices):.2f}  |  "
+                          f"Max: ${max(prices):.2f}  |  "
+                          f"Avg: ${sum(prices)/len(prices):.2f}  |  "
+                          f"Median: ${sorted(prices)[len(prices)//2]:.2f}")
+
     if args.terminal:
-        # Terminal output
+        # ---- Terminal output ----
         if args.group_by_event:
             from collections import OrderedDict
-            groups = OrderedDict()
-            for l in filtered:
-                key = l["event_title"] or "Unknown Event"
-                groups.setdefault(key, []).append(l)
-            for event_name, group_listings in groups.items():
-                display_listings(group_listings, event_name)
-                prices = [l["price"] for l in group_listings if l["price"] is not None and not l["is_sold"]]
-                if prices:
-                    console.print(f"\n[bold]Price summary:[/bold]  "
-                                  f"Min: ${min(prices):.2f}  |  "
-                                  f"Max: ${max(prices):.2f}  |  "
-                                  f"Avg: ${sum(prices)/len(prices):.2f}  |  "
-                                  f"Median: ${sorted(prices)[len(prices)//2]:.2f}\n")
+            key_order = OrderedDict()
+            active_groups, sold_groups = {}, {}
+            for l in active:
+                k = _group_key(l)
+                key_order.setdefault(k, None)
+                active_groups.setdefault(k, []).append(l)
+            for l in sold:
+                k = _group_key(l)
+                key_order.setdefault(k, None)
+                sold_groups.setdefault(k, []).append(l)
+
+            for k in key_order:
+                heading = _group_title(k)
+                if active_groups.get(k):
+                    display_listings(active_groups[k], heading)
+                    _print_price_summary(active_groups[k])
+                    console.print()
+                if sold_groups.get(k):
+                    display_listings(sold_groups[k], f"{heading} — Sold", show_sold_col=True)
+                    _print_price_summary(sold_groups[k], label="Sold price summary")
+                    console.print()
         else:
-            title = "All Events" if len(args.urls) > 1 else (filtered[0]["event_title"] if filtered else "Unknown")
-            display_listings(filtered, title)
-            prices = [l["price"] for l in filtered if l["price"] is not None and not l["is_sold"]]
-            if prices:
-                console.print(f"\n[bold]Price summary:[/bold]  "
-                              f"Min: ${min(prices):.2f}  |  "
-                              f"Max: ${max(prices):.2f}  |  "
-                              f"Avg: ${sum(prices)/len(prices):.2f}  |  "
-                              f"Median: ${sorted(prices)[len(prices)//2]:.2f}")
+            title = "All Events" if len(args.urls) > 1 else (
+                (active + sold)[0]["event_title"] if (active or sold) else "Unknown"
+            )
+            if active:
+                display_listings(active, title)
+                _print_price_summary(active)
+            if sold:
+                console.print()
+                display_listings(sold, f"{title} — Sold", show_sold_col=True)
+                _print_price_summary(sold, label="Sold price summary")
     else:
-        # HTML output (default)
-        title = "All Events" if len(args.urls) > 1 else (filtered[0]["event_title"] if filtered else "Unknown")
-        html = render_html(filtered, title, group_by_event=args.group_by_event)
+        # ---- HTML output (default) ----
+        title = "All Events" if len(args.urls) > 1 else (
+            (active + sold)[0]["event_title"] if (active or sold) else "Unknown"
+        )
+        html = render_html(active, sold, title, group_by_event=args.group_by_event)
 
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".html", prefix="tickets-", dir="/tmp", delete=False
