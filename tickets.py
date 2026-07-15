@@ -20,11 +20,18 @@ import sys
 import tempfile
 import webbrowser
 from datetime import datetime
+from importlib.metadata import PackageNotFoundError, version as _package_version
 
 import requests
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
+
+try:
+    __version__ = _package_version("cashortrade-search")
+except PackageNotFoundError:
+    # Running from a raw checkout without an editable/installed package.
+    __version__ = "0.0.0+unknown"
 
 API_BASE = "https://api-ng.cashortrade.org/frontend"
 SITE_BASE = "https://cashortrade.org"
@@ -727,6 +734,8 @@ Examples:
         """,
     )
 
+    parser.add_argument("--version", action="version",
+                        version=f"%(prog)s {__version__}")
     parser.add_argument("urls", nargs="+", help="One or more CashorTrade event URLs")
     parser.add_argument("--type", nargs="+", choices=["sale", "trade", "miracle"],
                         default=DEFAULT_TYPES,
