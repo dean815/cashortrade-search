@@ -148,7 +148,7 @@ def fetch_all_listings(event_product_uids: list[str]) -> list[dict]:
 
     while True:
         parts = [f"event_product[]={uid}" for uid in event_product_uids]
-        parts += [f"include_sold=true", f"limit={page_size}", f"offset={offset}"]
+        parts += ["include_sold=true", f"limit={page_size}", f"offset={offset}"]
         parts += [f"flow[]={f}" for f in ("sale", "trade", "miracle")]
 
         url = f"{API_BASE}/event/product/proposal/list?{'&'.join(parts)}"
