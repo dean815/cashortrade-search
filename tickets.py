@@ -148,7 +148,7 @@ def fetch_all_listings(event_product_uids: list[str]) -> list[dict]:
 
     while True:
         parts = [f"event_product[]={uid}" for uid in event_product_uids]
-        parts += [f"include_sold=true", f"limit={page_size}", f"offset={offset}"]
+        parts += ["include_sold=true", f"limit={page_size}", f"offset={offset}"]
         parts += [f"flow[]={f}" for f in ("sale", "trade", "miracle")]
 
         url = f"{API_BASE}/event/product/proposal/list?{'&'.join(parts)}"
@@ -604,9 +604,9 @@ def render_html(active: list[dict], sold: list[dict], title: str, group_by_event
     if group_by_event:
         from collections import OrderedDict
         # Preserve order of first appearance across active+sold
-        key_order = OrderedDict()
-        active_groups = {}
-        sold_groups = {}
+        key_order = OrderedDict()  # type: ignore[var-annotated]
+        active_groups = {}  # type: ignore[var-annotated]
+        sold_groups = {}  # type: ignore[var-annotated]
         for l in active:
             k = _key(l)
             key_order.setdefault(k, None)

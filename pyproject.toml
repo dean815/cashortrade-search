@@ -20,3 +20,30 @@ cashortrade-search = "tickets:main"
 
 [tool.setuptools]
 py-modules = ["tickets"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "mypy>=1.10",
+    "types-requests>=2.31",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+# E741 (ambiguous variable name) is disabled: the codebase consistently uses
+# `l` as the loop variable for "listing" in ~25 places. Renaming all of them
+# is a separate refactor, not part of adding tooling, and is out of scope here.
+ignore = ["E741"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = true
