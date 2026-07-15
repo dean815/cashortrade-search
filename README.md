@@ -1,5 +1,7 @@
 # cashortrade-search
 
+[![CI](https://github.com/dean815/cashortrade-search/actions/workflows/ci.yml/badge.svg)](https://github.com/dean815/cashortrade-search/actions/workflows/ci.yml)
+
 Search, filter, and sort ticket listings across one or more
 [CashorTrade](https://cashortrade.org) events from the command line —
 output as a sortable HTML page (default) or a `rich` terminal table.
