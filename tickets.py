@@ -712,7 +712,7 @@ function sortTable(th) {{
 # Main
 # ---------------------------------------------------------------------------
 
-def main():
+def run():
     parser = argparse.ArgumentParser(
         description="CashorTrade Search Tool — paste a URL, get sortable/filterable listings",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -907,6 +907,27 @@ Examples:
 
         console.print(f"Opening: {html_path}")
         webbrowser.open(f"file://{html_path}")
+
+
+def main():
+    """Top-level entry point.
+
+    Runs the pipeline and turns expected failure conditions into a clean,
+    one-line error + non-zero exit — never a raw Python traceback. Our own
+    "could not find event" paths already raise SystemExit with a red message,
+    so they propagate through untouched.
+    """
+    try:
+        run()
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted.[/yellow]")
+        sys.exit(130)
+    except requests.exceptions.RequestException as e:
+        console.print(f"[red]Error: network request failed: {e}[/red]")
+        sys.exit(1)
+    except Exception as e:  # noqa: BLE001 - defensive top-level safety net
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
