@@ -386,7 +386,8 @@ def format_listed(created: str) -> str:
         # API returns UTC timestamps
         dt_utc = datetime.strptime(created, "%Y-%m-%d %H:%M:%S").replace(tzinfo=ZoneInfo("UTC"))
         dt_local = dt_utc.astimezone()
-        return dt_local.strftime("%m/%d %-I:%M%p").lower()
+        hour = str(int(dt_local.strftime("%I")))
+        return f"{dt_local.strftime('%m/%d')} {hour}:{dt_local.strftime('%M%p').lower()}"
     except (ValueError, TypeError):
         return created[:10]
 
@@ -495,7 +496,8 @@ def render_html(active: list[dict], sold: list[dict], title: str, group_by_event
             from zoneinfo import ZoneInfo
             dt_utc = datetime.strptime(created, "%Y-%m-%d %H:%M:%S").replace(tzinfo=ZoneInfo("UTC"))
             dt_local = dt_utc.astimezone()
-            return dt_local.strftime("%m/%d %-I:%M%p").lower()
+            hour = str(int(dt_local.strftime("%I")))
+            return f"{dt_local.strftime('%m/%d')} {hour}:{dt_local.strftime('%M%p').lower()}"
         except (ValueError, TypeError):
             return created[:10]
 
@@ -898,7 +900,7 @@ Examples:
         html = render_html(active, sold, title, group_by_event=args.group_by_event)
 
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".html", prefix="tickets-", dir="/tmp", delete=False
+            mode="w", suffix=".html", prefix="tickets-", delete=False
         ) as f:
             f.write(html)
             html_path = f.name
