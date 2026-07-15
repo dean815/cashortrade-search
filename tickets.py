@@ -604,9 +604,9 @@ def render_html(active: list[dict], sold: list[dict], title: str, group_by_event
     if group_by_event:
         from collections import OrderedDict
         # Preserve order of first appearance across active+sold
-        key_order = OrderedDict()
-        active_groups = {}
-        sold_groups = {}
+        key_order = OrderedDict()  # type: ignore[var-annotated]
+        active_groups = {}  # type: ignore[var-annotated]
+        sold_groups = {}  # type: ignore[var-annotated]
         for l in active:
             k = _key(l)
             key_order.setdefault(k, None)
