@@ -49,7 +49,7 @@ cashortrade-search "URL" --terminal --sold --sort price-desc
 | `urls` | One or more CashorTrade event URLs (required) |
 | `--type {sale,trade,miracle}` | Listing types to show (default: `sale miracle`) |
 | `--tickets N` or `N-M` | Exact ticket count or range, e.g. `2` or `2-4` |
-| `--section ...` | Filter by section(s), partial match, e.g. `108 109 GA` |
+| `--section ...` | Filter by section(s): numeric patterns match exactly, other patterns (e.g. `GA`) partial-match |
 | `--row N` or `N-M` | Filter by row, e.g. `5` or `1-10` (GA/floor rows always pass) |
 | `--min-price` / `--max-price` | Price bounds per ticket |
 | `--show-sold` / `--sold` | Also show a separate "sold" section |
@@ -65,6 +65,11 @@ browser (click any column header to sort). Pass `--terminal` for a `rich`
 table in your terminal instead.
 
 ![Sample HTML output](docs/demo-screenshot.png)
+
+## Notes
+
+- `date`/`date-asc` sort by listing creation date, not the event date. To organize by event date, use `--group-by-event`.
+- API requests are throttled and retried automatically to respect cashortrade.org's rate limits.
 
 ## How this was built
 

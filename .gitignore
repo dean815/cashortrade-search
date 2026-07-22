@@ -7,3 +7,5 @@ __pycache__/
 .venv/
 venv/
 docs/demo.html
+.DS_Store
+requirements-snapshot-v2.txt
