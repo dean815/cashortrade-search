@@ -350,33 +350,28 @@ def apply_filters(listings: list[dict], args) -> list[dict]:
         lo, hi = parse_tickets_arg(args.tickets)
         filtered = [l for l in filtered if lo <= l["num_tickets"] <= hi]
 
-    # Section filter (multiple sections). Numeric patterns (e.g. "108")
+    # Section filter (multiple entries, each optionally capped by a max row
+    # via "PATTERN:MAXROW", e.g. "222:7"). Numeric patterns (e.g. "108")
     # match the section number exactly — otherwise short patterns like "1"
     # would substring-match "113", "211", etc. Non-numeric patterns (e.g.
-    # "GA") still do a partial match against the section strings.
+    # "GA") still do a partial match against the section strings. A listing
+    # without a numeric row (GA/Floor/Pit/etc.) always passes the row cap.
     if args.section:
-        patterns = [s.lower() for s in args.section]
+        entries = [(p.lower(), max_row) for p, max_row in
+                   (parse_section_arg(s) for s in args.section)]
 
         def _section_matches(l):
-            for p in patterns:
-                if p.isdigit():
-                    if l["section_raw"].lower() == p:
-                        return True
-                elif p in l["section"].lower() or p in l["section_raw"].lower():
+            for pattern, max_row in entries:
+                if pattern.isdigit():
+                    if l["section_raw"].lower() != pattern:
+                        continue
+                elif pattern not in l["section"].lower() and pattern not in l["section_raw"].lower():
+                    continue
+                if max_row is None or not l["row"].isdigit() or int(l["row"]) <= max_row:
                     return True
             return False
 
         filtered = [l for l in filtered if _section_matches(l)]
-
-    # Row filter (range, e.g. --row 1-10). Listings without a numeric row
-    # (GA / Floor / Pit / etc.) are always included — the filter only applies
-    # to seated sections.
-    if args.row:
-        lo, hi = parse_tickets_arg(args.row)  # reuse: "5" -> (5,5), "1-10" -> (1,10)
-        filtered = [
-            l for l in filtered
-            if not l["row"].isdigit() or lo <= int(l["row"]) <= hi
-        ]
 
     # Price filters
     if args.min_price is not None:
