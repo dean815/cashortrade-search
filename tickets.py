@@ -20,11 +20,18 @@ import sys
 import tempfile
 import webbrowser
 from datetime import datetime
+from importlib.metadata import PackageNotFoundError, version as _package_version
 
 import requests
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
+
+try:
+    __version__ = _package_version("cashortrade-search")
+except PackageNotFoundError:
+    # Running from a raw checkout without an editable/installed package.
+    __version__ = "0.0.0+unknown"
 
 API_BASE = "https://api-ng.cashortrade.org/frontend"
 SITE_BASE = "https://cashortrade.org"
@@ -148,7 +155,7 @@ def fetch_all_listings(event_product_uids: list[str]) -> list[dict]:
 
     while True:
         parts = [f"event_product[]={uid}" for uid in event_product_uids]
-        parts += [f"include_sold=true", f"limit={page_size}", f"offset={offset}"]
+        parts += ["include_sold=true", f"limit={page_size}", f"offset={offset}"]
         parts += [f"flow[]={f}" for f in ("sale", "trade", "miracle")]
 
         url = f"{API_BASE}/event/product/proposal/list?{'&'.join(parts)}"
@@ -396,7 +403,8 @@ def format_listed(created: str) -> str:
         # API returns UTC timestamps
         dt_utc = datetime.strptime(created, "%Y-%m-%d %H:%M:%S").replace(tzinfo=ZoneInfo("UTC"))
         dt_local = dt_utc.astimezone()
-        return dt_local.strftime("%m/%d %-I:%M%p").lower()
+        hour = str(int(dt_local.strftime("%I")))
+        return f"{dt_local.strftime('%m/%d')} {hour}:{dt_local.strftime('%M%p').lower()}"
     except (ValueError, TypeError):
         return created[:10]
 
@@ -505,7 +513,8 @@ def render_html(active: list[dict], sold: list[dict], title: str, group_by_event
             from zoneinfo import ZoneInfo
             dt_utc = datetime.strptime(created, "%Y-%m-%d %H:%M:%S").replace(tzinfo=ZoneInfo("UTC"))
             dt_local = dt_utc.astimezone()
-            return dt_local.strftime("%m/%d %-I:%M%p").lower()
+            hour = str(int(dt_local.strftime("%I")))
+            return f"{dt_local.strftime('%m/%d')} {hour}:{dt_local.strftime('%M%p').lower()}"
         except (ValueError, TypeError):
             return created[:10]
 
@@ -612,9 +621,9 @@ def render_html(active: list[dict], sold: list[dict], title: str, group_by_event
     if group_by_event:
         from collections import OrderedDict
         # Preserve order of first appearance across active+sold
-        key_order = OrderedDict()
-        active_groups = {}
-        sold_groups = {}
+        key_order = OrderedDict()  # type: ignore[var-annotated]
+        active_groups = {}  # type: ignore[var-annotated]
+        sold_groups = {}  # type: ignore[var-annotated]
         for l in active:
             k = _key(l)
             key_order.setdefault(k, None)
@@ -720,7 +729,7 @@ function sortTable(th) {{
 # Main
 # ---------------------------------------------------------------------------
 
-def main():
+def run():
     parser = argparse.ArgumentParser(
         description="CashorTrade Search Tool — paste a URL, get sortable/filterable listings",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -735,6 +744,8 @@ Examples:
         """,
     )
 
+    parser.add_argument("--version", action="version",
+                        version=f"%(prog)s {__version__}")
     parser.add_argument("urls", nargs="+", help="One or more CashorTrade event URLs")
     parser.add_argument("--type", nargs="+", choices=["sale", "trade", "miracle"],
                         default=DEFAULT_TYPES,
@@ -908,13 +919,34 @@ Examples:
         html = render_html(active, sold, title, group_by_event=args.group_by_event)
 
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".html", prefix="tickets-", dir="/tmp", delete=False
+            mode="w", suffix=".html", prefix="tickets-", delete=False
         ) as f:
             f.write(html)
             html_path = f.name
 
         console.print(f"Opening: {html_path}")
         webbrowser.open(f"file://{html_path}")
+
+
+def main():
+    """Top-level entry point.
+
+    Runs the pipeline and turns expected failure conditions into a clean,
+    one-line error + non-zero exit — never a raw Python traceback. Our own
+    "could not find event" paths already raise SystemExit with a red message,
+    so they propagate through untouched.
+    """
+    try:
+        run()
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted.[/yellow]")
+        sys.exit(130)
+    except requests.exceptions.RequestException as e:
+        console.print(f"[red]Error: network request failed: {e}[/red]")
+        sys.exit(1)
+    except Exception as e:  # noqa: BLE001 - defensive top-level safety net
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

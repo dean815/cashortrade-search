@@ -1,76 +1,82 @@
-# CashOrTrade Ticket Search Tool
+# cashortrade-search
 
-A command-line tool for searching, filtering, and sorting ticket listings from [cashortrade.org](https://cashortrade.org), a peer-to-peer concert/event ticket exchange. Paste one or more event URLs and get back a sortable, filterable table of listings — either as an interactive HTML page or a table printed to your terminal.
+[![CI](https://github.com/dean815/cashortrade-search/actions/workflows/ci.yml/badge.svg)](https://github.com/dean815/cashortrade-search/actions/workflows/ci.yml)
 
-## Features
+Search, filter, and sort ticket listings across one or more
+[CashorTrade](https://cashortrade.org) events from the command line —
+output as a sortable HTML page (default) or a `rich` terminal table.
 
-- Search one or more events at once, with results merged or grouped
-- Filter by listing type (sale/trade/miracle), ticket count, section, row, and price
-- Sort by price or listing date
-- Optionally show sold listings alongside (or instead of) active ones
-- Self-contained, sortable HTML output by default — easy to share
-- Terminal table output available via `--terminal`
+## Why I built this
 
-## Installation
+Manually refreshing a CashorTrade event page during a ticket drop is slow
+and it's easy to miss listings while you're staring at a single page.
+This hits the CashorTrade API directly, merges results across as many
+event URLs as you give it, and gives me one sortable/filterable view
+instead of babysitting a browser tab.
 
-The recommended way to install is with [pipx](https://pipx.pypa.io/), which handles an isolated environment for you:
+## Install
 
-```bash
-pipx install git+https://github.com/dean815/cashortrade-search.git
-```
-
-Once installed, the `tickets` command is available anywhere.
-
-### Alternative: manual venv
+Requires Python 3.11+.
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
+git clone https://github.com/dean815/cashortrade-search.git
+cd cashortrade-search
 pip install -e .
 ```
 
-This installs the same `tickets` console command, scoped to the venv.
-
-Requires Python 3.9+. Dependencies (`requests`, `rich`) are installed automatically either way.
+This installs a `cashortrade-search` command. (You can also run it directly
+without installing: `python tickets.py "URL"`.)
 
 ## Usage
 
-```bash
-tickets "https://cashortrade.org/<event-slug>/event/<uuid>"
+```
+cashortrade-search "URL1" ["URL2" ...] [options]
 ```
 
-By default this generates an HTML file and opens it in your browser, with active listings sorted by price ascending, showing `sale` and `miracle` type listings.
+```bash
+cashortrade-search "https://cashortrade.org/phish-at-sphere-tickets/event/<uuid>"
+cashortrade-search "URL1" "URL2" --max-price 200 --sort price
+cashortrade-search "URL" --section 108 109 110 --type sale miracle
+cashortrade-search "URL" --tickets 2-4 --sort date
+cashortrade-search "URL1" "URL2" --group-by-event
+cashortrade-search "URL" --terminal --sold --sort price-desc
+```
 
 ### Options
 
 | Flag | Description |
 |---|---|
-| `"URL1" "URL2" ...` | Pass multiple event URLs to merge results together |
-| `--type sale trade miracle` | Which listing types to include (default: `sale miracle`) |
-| `--tickets 2` or `--tickets 2-4` | Filter by exact ticket count or range |
-| `--section 108 109 GA` | Filter by section (partial match, multiple allowed) |
-| `--row 1-10` | Filter by row range (GA/floor listings always pass through) |
-| `--min-price 50` / `--max-price 200` | Price filters |
-| `--sort price\|price-desc\|date\|date-asc` | Sort order (default `price`) |
-| `--show-sold` | Add a second "sold" section below active listings |
+| `urls` | One or more CashorTrade event URLs (required) |
+| `--type {sale,trade,miracle}` | Listing types to show (default: `sale miracle`) |
+| `--tickets N` or `N-M` | Exact ticket count or range, e.g. `2` or `2-4` |
+| `--section ...` | Filter by section(s): numeric patterns match exactly, other patterns (e.g. `GA`) partial-match |
+| `--row N` or `N-M` | Filter by row, e.g. `5` or `1-10` (GA/floor rows always pass) |
+| `--min-price` / `--max-price` | Price bounds per ticket |
+| `--show-sold` / `--sold` | Also show a separate "sold" section |
 | `--show-only-sold` | Show only sold listings |
-| `--group-by-event` | Separate tables per event/ticket-type/date instead of one merged table |
-| `--terminal` | Print a table to the terminal instead of opening HTML |
+| `--sort {price,price-desc,date,date-asc}` | Sort order (default: `price`) |
+| `--terminal` | Print a `rich` table instead of opening HTML (default: HTML) |
+| `--group-by-event` | Separate tables per event instead of one merged table |
 
-### Examples
+## Output
 
-```bash
-# Cheapest 2-ticket sale listings in section 108/109, under $200
-tickets "URL" --type sale --tickets 2 --section 108 109 --max-price 200 --sort price
+By default, results open as a self-contained, sortable HTML file in your
+browser (click any column header to sort). Pass `--terminal` for a `rich`
+table in your terminal instead.
 
-# Compare two shows side by side, grouped
-tickets "URL1" "URL2" --group-by-event
-
-# Terminal view, most expensive first, including sold
-tickets "URL" --terminal --sort price-desc --show-sold
-```
+![Sample HTML output](docs/demo-screenshot.png)
 
 ## Notes
 
 - `date`/`date-asc` sort by listing creation date, not the event date. To organize by event date, use `--group-by-event`.
 - API requests are throttled and retried automatically to respect cashortrade.org's rate limits.
+
+## How this was built
+
+This repo follows a spec-then-plan workflow before any feature lands —
+see [`docs/superpowers/`](docs/superpowers/) for the design specs and
+task-by-task implementation plans this tool was actually built from.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

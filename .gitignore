@@ -1,7 +1,11 @@
-.DS_Store
 __pycache__/
-requirements-snapshot-v2.txt
+*.py[cod]
 *.egg-info/
-build/
-dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
 venv/
+docs/demo.html
+.DS_Store
+requirements-snapshot-v2.txt
