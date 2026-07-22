@@ -748,7 +748,7 @@ def run():
 Examples:
   %(prog)s "URL"
   %(prog)s "URL1" "URL2" --max-price 200 --sort price
-  %(prog)s "URL" --section 108 109 110 --type sale miracle
+  %(prog)s "URL" --section 108 109 220:7 --type sale miracle
   %(prog)s "URL" --tickets 2-4 --sort date
   %(prog)s "URL1" "URL2" --group-by-event
   %(prog)s "URL" --terminal --sold --sort price-desc
@@ -764,9 +764,8 @@ Examples:
     parser.add_argument("--tickets",
                         help="Number of tickets: exact (e.g. 2) or range (e.g. 2-4)")
     parser.add_argument("--section", nargs="+",
-                        help="Filter by section(s), partial match (e.g. 108 109 GA)")
-    parser.add_argument("--row",
-                        help="Filter by row: exact (e.g. 5) or range (e.g. 1-10)")
+                        help="Filter by section(s), partial match (e.g. 108 109 GA); "
+                             "add :MAXROW to cap a section's row (e.g. 222:7)")
     parser.add_argument("--min-price", type=float, help="Minimum price per ticket")
     parser.add_argument("--max-price", type=float, help="Maximum price per ticket")
     parser.add_argument("--show-sold", "--sold", dest="show_sold", action="store_true",
@@ -790,6 +789,14 @@ Examples:
             parse_tickets_arg(args.tickets)
         except ValueError:
             parser.error("--tickets must be a number (e.g. 2) or range (e.g. 2-4)")
+
+    # Validate section args
+    if args.section:
+        for s in args.section:
+            try:
+                parse_section_arg(s)
+            except ValueError as e:
+                parser.error(str(e))
 
     import time
     all_parsed = []
