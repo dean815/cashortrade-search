@@ -11,6 +11,7 @@ from tickets import (
     apply_filters,
     format_listed,
     parse_listing,
+    parse_section_arg,
     parse_tickets_arg,
     sort_listings,
 )
@@ -31,6 +32,28 @@ def test_parse_tickets_arg_range():
 def test_parse_tickets_arg_invalid_raises():
     with pytest.raises(ValueError):
         parse_tickets_arg("abc")
+
+
+# ---------------------------------------------------------------------------
+# parse_section_arg
+# ---------------------------------------------------------------------------
+
+def test_parse_section_arg_no_cap():
+    assert parse_section_arg("222") == ("222", None)
+
+
+def test_parse_section_arg_non_numeric_pattern_no_cap():
+    assert parse_section_arg("GA") == ("GA", None)
+
+
+def test_parse_section_arg_with_cap():
+    assert parse_section_arg("222:7") == ("222", 7)
+
+
+@pytest.mark.parametrize("value", ["222:", "222:abc", "222:0", "222:-1", ":7"])
+def test_parse_section_arg_malformed_raises(value):
+    with pytest.raises(ValueError):
+        parse_section_arg(value)
 
 
 # ---------------------------------------------------------------------------

@@ -320,6 +320,22 @@ def parse_tickets_arg(value: str) -> tuple[int, int]:
     return n, n
 
 
+def parse_section_arg(value: str) -> tuple[str, int | None]:
+    """Parse a --section entry: 'PATTERN' -> (pattern, None), 'PATTERN:MAXROW' -> (pattern, max_row)."""
+    if ":" not in value:
+        return value, None
+    pattern, _, max_row_str = value.rpartition(":")
+    if not pattern:
+        raise ValueError(f"invalid --section entry {value!r}: missing pattern before ':'")
+    try:
+        max_row = int(max_row_str)
+    except ValueError:
+        raise ValueError(f"invalid --section entry {value!r}: max row must be a positive integer") from None
+    if max_row <= 0:
+        raise ValueError(f"invalid --section entry {value!r}: max row must be a positive integer")
+    return pattern, max_row
+
+
 def apply_filters(listings: list[dict], args) -> list[dict]:
     """Apply user-specified filters (excluding sold/active split — that's done in main)."""
     filtered = listings
