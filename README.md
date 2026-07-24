@@ -49,8 +49,7 @@ cashortrade-search "URL" --terminal --sold --sort price-desc
 | `urls` | One or more CashorTrade event URLs (required) |
 | `--type {sale,trade,miracle}` | Listing types to show (default: `sale miracle`) |
 | `--tickets N` or `N-M` | Exact ticket count or range, e.g. `2` or `2-4` |
-| `--section ...` | Filter by section(s): numeric patterns match exactly, other patterns (e.g. `GA`) partial-match |
-| `--row N` or `N-M` | Filter by row, e.g. `5` or `1-10` (GA/floor rows always pass) |
+| `--section ...` | Filter by section(s): numeric patterns match exactly, other patterns (e.g. `GA`) partial-match. Optionally cap a section's row with `:MAXROW`, e.g. `222:7` (rows 1-7 inclusive; GA/floor rows in that section always pass) |
 | `--min-price` / `--max-price` | Price bounds per ticket |
 | `--show-sold` / `--sold` | Also show a separate "sold" section |
 | `--show-only-sold` | Show only sold listings |

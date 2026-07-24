@@ -11,6 +11,7 @@ from tickets import (
     apply_filters,
     format_listed,
     parse_listing,
+    parse_section_arg,
     parse_tickets_arg,
     sort_listings,
 )
@@ -34,11 +35,33 @@ def test_parse_tickets_arg_invalid_raises():
 
 
 # ---------------------------------------------------------------------------
+# parse_section_arg
+# ---------------------------------------------------------------------------
+
+def test_parse_section_arg_no_cap():
+    assert parse_section_arg("222") == ("222", None)
+
+
+def test_parse_section_arg_non_numeric_pattern_no_cap():
+    assert parse_section_arg("GA") == ("GA", None)
+
+
+def test_parse_section_arg_with_cap():
+    assert parse_section_arg("222:7") == ("222", 7)
+
+
+@pytest.mark.parametrize("value", ["222:", "222:abc", "222:0", "222:-1", ":7"])
+def test_parse_section_arg_malformed_raises(value):
+    with pytest.raises(ValueError):
+        parse_section_arg(value)
+
+
+# ---------------------------------------------------------------------------
 # apply_filters
 # ---------------------------------------------------------------------------
 
 def make_args(**overrides):
-    defaults = dict(type=None, tickets=None, section=None, row=None,
+    defaults = dict(type=None, tickets=None, section=None,
                      min_price=None, max_price=None)
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
@@ -86,10 +109,35 @@ def test_apply_filters_by_section_partial_match_case_insensitive():
     assert len(result) == 1 and result[0]["section"] == "GA - Floor"
 
 
-def test_apply_filters_row_range_includes_ga_regardless():
-    listings = [L(row="5"), L(row="15"), L(row="")]  # "" == GA/floor
-    result = apply_filters(listings, make_args(row="1-10"))
-    assert sorted(l["row"] for l in result) == ["", "5"]
+def test_apply_filters_section_with_max_row_excludes_higher_rows():
+    listings = [L(section_raw="222", row="5"), L(section_raw="222", row="12")]
+    result = apply_filters(listings, make_args(section=["222:7"]))
+    assert [l["row"] for l in result] == ["5"]
+
+
+def test_apply_filters_section_with_max_row_includes_ga_rows_in_that_section():
+    listings = [L(section="GA - Floor", section_raw="", row="")]
+    result = apply_filters(listings, make_args(section=["ga:7"]))
+    assert len(result) == 1
+
+
+def test_apply_filters_mixed_capped_and_uncapped_sections():
+    listings = [
+        L(section_raw="102", row="20"),   # uncapped section, high row: included
+        L(section_raw="222", row="5"),    # capped section, within cap: included
+        L(section_raw="222", row="12"),   # capped section, over cap: excluded
+        L(section_raw="309", row="3"),    # not requested at all: excluded
+    ]
+    result = apply_filters(listings, make_args(section=["102", "222:7"]))
+    assert sorted((l["section_raw"], l["row"]) for l in result) == [
+        ("102", "20"), ("222", "5"),
+    ]
+
+
+def test_apply_filters_uncapped_entry_unaffected_by_other_entrys_cap():
+    listings = [L(section_raw="102", row="99")]
+    result = apply_filters(listings, make_args(section=["102", "222:1"]))
+    assert len(result) == 1
 
 
 def test_apply_filters_price_bounds_exclude_missing_price():

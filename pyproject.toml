@@ -24,7 +24,7 @@ py-modules = ["tickets"]
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
-    "ruff>=0.6",
+    "ruff>=0.6,<0.16",
     "mypy>=1.10",
     "types-requests>=2.31",
 ]

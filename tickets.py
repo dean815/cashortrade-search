@@ -320,6 +320,22 @@ def parse_tickets_arg(value: str) -> tuple[int, int]:
     return n, n
 
 
+def parse_section_arg(value: str) -> tuple[str, int | None]:
+    """Parse a --section entry: 'PATTERN' -> (pattern, None), 'PATTERN:MAXROW' -> (pattern, max_row)."""
+    if ":" not in value:
+        return value, None
+    pattern, _, max_row_str = value.rpartition(":")
+    if not pattern:
+        raise ValueError(f"invalid --section entry {value!r}: missing pattern before ':'")
+    try:
+        max_row = int(max_row_str)
+    except ValueError:
+        raise ValueError(f"invalid --section entry {value!r}: max row must be a positive integer") from None
+    if max_row <= 0:
+        raise ValueError(f"invalid --section entry {value!r}: max row must be a positive integer")
+    return pattern, max_row
+
+
 def apply_filters(listings: list[dict], args) -> list[dict]:
     """Apply user-specified filters (excluding sold/active split — that's done in main)."""
     filtered = listings
@@ -334,33 +350,28 @@ def apply_filters(listings: list[dict], args) -> list[dict]:
         lo, hi = parse_tickets_arg(args.tickets)
         filtered = [l for l in filtered if lo <= l["num_tickets"] <= hi]
 
-    # Section filter (multiple sections). Numeric patterns (e.g. "108")
+    # Section filter (multiple entries, each optionally capped by a max row
+    # via "PATTERN:MAXROW", e.g. "222:7"). Numeric patterns (e.g. "108")
     # match the section number exactly — otherwise short patterns like "1"
     # would substring-match "113", "211", etc. Non-numeric patterns (e.g.
-    # "GA") still do a partial match against the section strings.
+    # "GA") still do a partial match against the section strings. A listing
+    # without a numeric row (GA/Floor/Pit/etc.) always passes the row cap.
     if args.section:
-        patterns = [s.lower() for s in args.section]
+        entries = [(p.lower(), max_row) for p, max_row in
+                   (parse_section_arg(s) for s in args.section)]
 
         def _section_matches(l):
-            for p in patterns:
-                if p.isdigit():
-                    if l["section_raw"].lower() == p:
-                        return True
-                elif p in l["section"].lower() or p in l["section_raw"].lower():
+            for pattern, max_row in entries:
+                if pattern.isdigit():
+                    if l["section_raw"].lower() != pattern:
+                        continue
+                elif pattern not in l["section"].lower() and pattern not in l["section_raw"].lower():
+                    continue
+                if max_row is None or not l["row"].isdigit() or int(l["row"]) <= max_row:
                     return True
             return False
 
         filtered = [l for l in filtered if _section_matches(l)]
-
-    # Row filter (range, e.g. --row 1-10). Listings without a numeric row
-    # (GA / Floor / Pit / etc.) are always included — the filter only applies
-    # to seated sections.
-    if args.row:
-        lo, hi = parse_tickets_arg(args.row)  # reuse: "5" -> (5,5), "1-10" -> (1,10)
-        filtered = [
-            l for l in filtered
-            if not l["row"].isdigit() or lo <= int(l["row"]) <= hi
-        ]
 
     # Price filters
     if args.min_price is not None:
@@ -737,7 +748,7 @@ def run():
 Examples:
   %(prog)s "URL"
   %(prog)s "URL1" "URL2" --max-price 200 --sort price
-  %(prog)s "URL" --section 108 109 110 --type sale miracle
+  %(prog)s "URL" --section 108 109 220:7 --type sale miracle
   %(prog)s "URL" --tickets 2-4 --sort date
   %(prog)s "URL1" "URL2" --group-by-event
   %(prog)s "URL" --terminal --sold --sort price-desc
@@ -753,9 +764,8 @@ Examples:
     parser.add_argument("--tickets",
                         help="Number of tickets: exact (e.g. 2) or range (e.g. 2-4)")
     parser.add_argument("--section", nargs="+",
-                        help="Filter by section(s), partial match (e.g. 108 109 GA)")
-    parser.add_argument("--row",
-                        help="Filter by row: exact (e.g. 5) or range (e.g. 1-10)")
+                        help="Filter by section(s), partial match (e.g. 108 109 GA); "
+                             "add :MAXROW to cap a section's row (e.g. 222:7)")
     parser.add_argument("--min-price", type=float, help="Minimum price per ticket")
     parser.add_argument("--max-price", type=float, help="Maximum price per ticket")
     parser.add_argument("--show-sold", "--sold", dest="show_sold", action="store_true",
@@ -779,6 +789,14 @@ Examples:
             parse_tickets_arg(args.tickets)
         except ValueError:
             parser.error("--tickets must be a number (e.g. 2) or range (e.g. 2-4)")
+
+    # Validate section args
+    if args.section:
+        for s in args.section:
+            try:
+                parse_section_arg(s)
+            except ValueError as e:
+                parser.error(str(e))
 
     import time
     all_parsed = []
